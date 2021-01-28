@@ -1,0 +1,365 @@
+---
+title: "Exploring Malawi ART Quarterly Data"
+author: "Oliver Jintha Gadabu"
+date: "12/5/2017"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Visualizing the Malawi Anti-Retroviral (ARV) therapy Clinic Data to Explore Patterns in R
+
+##Introduction
+
+The Malawi Ministry of Health (MoH) has deployed electronic medical record (EMR)(1) system to all high burden health facilities managing patients with HIV/AIDS enrolled in Anti-Retroviral (ARV) therapy clinics in Malawi. The EMR has been deployed to coordinate care at the health facilities and to inform the MoH in supply chain decisions by providing quarterly cohort analysis reports. Although the EMR facilitates quick report generation with automated internal consistency checks, the reports are not inspected for relationships that may exist within various sections of the report. Inspection is conducted by MoH supervision teams.  The reports also lack a visual way of exploring relationships that may suggest implausible data. Therefore, this work will aim at exploring the feasibility of building a set of reports that should be run on the reports to facilitate easy inspection of the report. 
+
+**Question**
+Can visual reporting tools improve inspection of the cohort analysis report?
+
+**Specific questions**
+- What is the registration of patients at health facilities and the demographics of those registered?
+- At what stage of disease do most of the registered patients start medication?
+- What medications are the patients alive and on treatment taking at the specific reporting period?
+- How do health facilities compare in terms of the death adverse outcome? At what months are most patients dying after starting treatment?
+
+**Methods**
+**Data collection**
+The data for this analysis are rotinely collected from electronic medical record (EMR) systems in Malawi(1). The EMR systems are built using ruby on rails, and run a MySQL back end. The data that was used in this exercise is from aggregated reports from 83 health facilities that manage over 500, 000 patients ever registered at the health facilities. These data were accessed from the developer of the EMR, Baobab Health Trust. In addition, another dataset of patient records at the individual level was used to explore any patterns towards the death outcome. The aggregate file contained 83 sites and about 120 variables. The patient level data contained up to 3,000 patient records. 
+
+**Data manipulation**
+The data were loaded in R and manipulated using both table and dplyr packages in R. The following actions were done:
+- Removal of unwanted rows. This was done by passing [,-c(1)] action on the loaded dataset, having converted it to a table.
+- Dealing with blank lines. Although, the researcher tried to remove these in the read statement of R, by including the option of "skip.blank.lines = TRUE", this did not give the desired output hence the researcher used plyr to issue a "filter !="" " command. 
+- Converting factor based values to numeric - This was done so that the researcher could gather the sites as keys over the variables in the dataset. One challenge was to convert the values to numeric. This was done by first converting the values to numeric. In conversion, the factors had to be converted to character first, then to numeric as direct conversion resulted in the levels of the factors being returned as numeric values.
+
+
+```{r global_options, setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.width = 12, fig.height = 10,
+                      warning = FALSE, message = FALSE)
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gplots)
+library(cluster)
+
+
+```
+**Data Analysis**
+
+**Part A: Describing the dataset and manipulations**
+1. Descriptive analysis using summary to get the characteristics of variables, i.e. what are the indicators monitored and form of the dataset?
+
+```{r}
+malawi_art = read.csv("malawi_cohort_2017.csv", header = TRUE, blank.lines.skip = TRUE, stringsAsFactors = TRUE)
+mw_art_dt = as.data.table(malawi_art)
+mw_art_dt = mw_art_dt[-c(1),]
+#
+#head(mw_art_dt,3)
+str(mw_art_dt)
+cols_to_select <- names(select(mw_art_dt, Area.18:Zomba))
+mdf =  as.data.frame(mw_art_dt)
+
+mdf = mdf %>% filter(X3161 != "") %>% filter(X3161 !="Internally Consistent") %>% select(X3161:Zomba) 
+names(mdf)[names(mdf)=="X3161"] <- "indicator"
+
+
+mdf[,cols_to_select] = sapply(mdf[,cols_to_select ], as.character)
+
+drop_comma = function(x)
+{
+  return(gsub(",","",x))
+}
+mdf[,cols_to_select] = sapply(mdf[,cols_to_select ], drop_comma)
+
+mdf[,cols_to_select] = sapply(mdf[,cols_to_select ], as.numeric)
+
+new_mw = mdf %>% gather(Area.18:Zomba,key = "sites", value = "indicator_observations" )
+
+
+registrations_graph = new_mw %>% filter(indicator == "Registered Patients")
+
+alive_on_treatment = new_mw %>% filter(indicator == "Total alive and on ART")
+transfer_out = new_mw %>% filter(indicator == "Transferred out")
+art_stop = new_mw %>% filter(indicator == "Stopped taking ARVs (clinician or patient own decision, last known alive)")
+died_total = new_mw %>% filter(indicator == "Died total")
+loss_to_follow_up = new_mw %>% filter(indicator == "Defaulted (more than 2 months overdue after expected to have run out of ARVs)")
+
+```
+
+**Answering first Question: Registrations per site.**
+2.	Bar graph of case data. These are presented as counts in the dataset and will show total number of patients that have ever been registered at a given health facility. Although this is a single point in registration the cumulative registrations presented in relation to other health facilities may give an impression of how health facilities are performing.
+
+```{r}
+
+ggplot(registrations_graph, aes(x=sites,y=indicator_observations)) + geom_bar(stat = "identity") + labs(x = "Health facility name", y = "Total count", title = "Total Number of Patients Ever Registered in ART" ) + theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.title = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 1)
+  )
+
+
+```
+2b) How manny clinics fall into specific bins? High burden clinics have been classified as those that have ever registered 2,500 patients.
+
+```{r}
+table(cut(registrations_graph$indicator_observations, breaks = c(5000,10000,15000,20000,25000,30000,35000,40000,50000),include.lowest = TRUE, labels = c("<5,000", "5000 < P< 10000","10,000 < P< 15,000","15,000 < P< 20,000","20,000 < P< 25,000","25,000 < P< 30,000","30,000 < P< 35,000","35,000 < P< 40,000")))
+
+```
+
+**Who are the registered people: Gender**
+
+3 a) Who are these people that have been enrolled in ART clinics. What is their gender? 
+
+```{r}
+registrations_composition = new_mw %>% filter(indicator %in% c("Males (all ages)","Non-Pregnant Female","Pregnant Females (all ages)"))
+
+ggplot(registrations_composition, aes(x = sites,y = indicator_observations, fill = indicator)) + geom_bar(stat = "identity") + geom_point(data = registrations_graph,aes(x=sites,y=indicator_observations))+
+geom_line(data = registrations_graph, aes(x = sites,y = indicator_observations), group = 1) +
+labs(x = "Health facility name", y = "Total count", title = "Males, Pregnant and Non Pregnant Females Enrolled at ART Clinics" ) + theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.title = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 1)
+  )
+
+#+ geom_point(data = registrations_graph, aes(indicator_observations)) + geom_line(data = #registrations_graph, aes(x = sites,y = indicator_observations))
+
+```
+
+The analysis above shows the female non-pregnant group is highest at the time of enrollment. This may not entirely mean that there are more women infected with HIV/AIDS during this reporting period. It may simply mean that more women are accessing care than the men, hence being identified and enrolled quicker. 
+
+**Registrations: What are the age classifications**
+
+b) What is the age characteristic of the patients that were tallied at this point.  This shows which age groups may be classified as vulnerable to the disease.
+
+```{r}
+registrations_age_groups = new_mw %>% filter(indicator %in% c("A: Children below (24months at ART initiation)","B: Children (24 months - 14 yrs at ART initiation)","Adults (15 years or older at ART initiation)","Unknown Age"))
+
+ggplot(registrations_age_groups, aes(x = sites,y = indicator_observations, fill = indicator)) + geom_bar(stat = "identity") + labs(x = "Health facility name", y = "Total count", title = "Cumulative Patient Age Groups" ) + theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.title = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 1)
+  )
+```
+
+**Registrations: Looking at the you*nger age groups**
+
+3 (c) Although this plot shows that the majority of the patients are adults at enrollment, almost each health facility has a representation of infants at enrollment. There are also some adolescents that are reported in this plot. We further analyze these data to see the aggregate count of each of the indicators in the graph above and do a plot of the children age groups only below:
+
+```{r}
+
+r_dt = as.data.table(registrations_age_groups)
+r_dt = na.omit(r_dt)
+
+aggregate(r_dt$indicator_observations,list("Age groups"=r_dt$indicator),sum)
+
+under_14 = registrations_age_groups %>% filter(indicator %in% c("A: Children below (24months at ART initiation)","B: Children (24 months - 14 yrs at ART initiation)"))
+
+ggplot(under_14, aes(x = sites,y = indicator_observations, fill = indicator)) + geom_bar(stat = "identity", position = "fill") + labs(x = "Health facility name", y = "Total count", title = "Cumulative Under 14 Patient Age Groups" ) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.title = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 1)
+  )
+
+
+```
+
+Having explored further the under < 14 age group, it is clear that there are up to 35% infants at initiation in some of the health facilities during the reporting period. Although this may seem low in comparison to all the patient population, it indicates further investigation regarding the infant prevention programs. 
+
+
+**Stage of disease per health facility**
+
+4 (a) What are the different stages of disease that patients have at enrollment into the ART program. 
+
+```{r}
+reason_for_enrollment = new_mw %>% filter(indicator %in% c("Presumed severe HIV disease in infants","Infants < 12months PCR +", "Children 12 – 59 Months","Breastfeeding Mothers","CD4 below threshold","Asympomatic","WHO stage 3","WHO stage 4","Unknown/other reason outside guidelines"))
+
+ggplot(reason_for_enrollment, aes(x = sites,y = indicator_observations, fill = indicator)) + geom_bar(stat = "identity") + labs(x = "Health facility name", y = "Total count", title = "Count of Reasons for Enrolling into ART" ) + theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.title = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 1)
+  )
+
+
+
+
+
+```
+
+4 b) The Analysis above shows that WHO Stage 3 was the most common reason for starting patients onto ART during this reporting period. The second most common reason was classification due to CD4 count being below required threshold. Although, there was the observation above,  are health facilities classifying patients relatively the same or there are some health facilities that have classified some patients more into a particular group for reason of enrollment into the ART program?
+
+**Stage of disease: Are there any outliers in the staging of different diseases per site?**
+
+```{r}
+
+check_outlier <- function(v, coef=1.5){
+  quantiles <- quantile(v,probs=c(0.25,0.75))
+  IQR <- quantiles[2]-quantiles[1]
+  res <- v < (quantiles[1]-coef*IQR)|v > (quantiles[2]+coef*IQR)
+  return(res)
+}
+
+#apply this to our data
+#
+reasons_dt = as.data.table(reason_for_enrollment)
+reasons_dt = na.omit(reasons_dt)
+reasons_dt[,outlier := check_outlier(indicator_observations),by = indicator]
+reasons_dt[,label := ifelse(outlier,sites,"")]
+
+
+ggplot(reasons_dt, aes(x = indicator,y = indicator_observations, fill = indicator)) + geom_boxplot(aes(alpha=1/10)) +
+geom_text(aes(label=label),hjust=-0.3) +  
+labs(x = "Health facility name", y = "Total count", title = "Count of Reasons for Enrolling into ART" ) + theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.title = element_blank(),
+        legend.position = "none",
+        axis.text.x = element_text(angle = 90, hjust = 1)
+  )
+
+```
+
+This analysis shows that more outliers in the Stage 3 classification, CD4 classification and Stage 4 classification. CD4 classification requires laboratory equipment, which may suggest that some of the facilities that are outliers in this analysis had access to labs and hence enrolled patients more into the ART program. Indeed labelling the outlier sites shows that the clinics with the observed outliers have huge resources.
+
+
+**Explore any patterns for the stage defining conditions accross several sites to see if there are any clustering using a heat map**
+
+```{r}
+
+nd = spread(reason_for_enrollment,key=indicator,value = indicator_observations)
+
+nd_t = as.data.table(nd)
+nd_t = na.omit(nd_t)
+nd_t = nd_t %>% mutate(sites = as.factor(sites))
+nd_t = as.data.frame(nd_t)
+row.names(nd_t) = nd_t[,1]
+#rownames(nd_t)=paste(c(1:nrow(nd_t)),nd_t[,1])
+nd_t[,1] = NULL
+nd_t = scale(nd_t)
+
+heatmap.2(as.matrix(nd_t), 
+          hclustfun = function(x) hclust(x,method = "average"), 
+          scale = "column", 
+          dendrogram="row", 
+          trace="none", 
+          density.info="none", 
+          col=redblue(256), 
+          lhei=c(2,5.0), 
+          lwid=c(1.5,2.5), 
+          keysize = 0.25, 
+          margins = c(5, 8), cexRow=0.7,cexCol=0.7)
+
+```
+
+
+To verify any clustering, the graph above shows that there is clustering for patients in terms of reasons for starting medication for some sites than others. More particularly these sites can be identified from the heavy clustering.
+
+
+**ART regimens that patients are taking**
+5 a) What regimens are the patients taking at the time of reporting? 
+
+```{r}
+art_regimens = new_mw %>% filter(indicator %in% c("Regimen 0P","Regimen 0A","Regimen 2P","Regimen 4P","Regimen 9P","Regimen 11P","Regimen 9P","Regimen 2A","Regimen 4A","Regimen 5A","Regimen 6A","Regimen 7A","Regimen 8A","Regimen 9A","Regimen 10A","Regimen 11A"))
+
+ggplot(art_regimens, aes(x = sites,y = indicator_observations, fill = indicator)) + geom_bar(stat="identity") + labs(x = "Health facility name", y = "Total count", title = "Regimens That Patients Are Taking" ) + theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.title = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 1)
+  )
+
+
+```
+
+The majority of the patients seem to be taking 5A, followed by 2A. Patients are started on this regimen, hence this figure is consistent with expecations from national program.
+
+
+
+```{r}
+
+death_outcomes = new_mw %>% filter(indicator %in% c("Died within the 1st month after ART initiation","Died within the 2nd month after ART initiation","Died within the 3rd month after ART initiation", "Died after the 3rd month of ART initiation"))
+ggplot(death_outcomes, aes(x=sites,y=indicator_observations, fill=indicator)) + geom_bar(stat = "identity") + labs(x = "Health facility name", y = "Total count", title = "Total Number of Patients With Death Outcome" ) + theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.title = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 1)
+  )
+
+
+```
+
+
+
+The graph above indicates that many patients during this reporting period, many patients were classified to have died within the first month of being enrolled within the ART clinics. This could be related to the stage that the patients enroll into ART clinics. This would require further investigation at the patient level.
+
+
+7 (b) Can we recognize any patterns in terms of the outcomes and other variables?
+#spread the data. plot the death count and stage defining condition.
+
+```{r}
+death_and_disease_class = new_mw %>%  filter(indicator %in% c("Presumed severe HIV disease in infants","Infants < 12months PCR +", "Children 12 – 59 Months","Breastfeeding Mothers","CD4 below threshold","Asympomatic","WHO stage 3","WHO stage 4","Unknown/other reason outside guidelines","Died total"))
+
+
+```
+
+
+
+Let us now see the registrations with the different outcomes per health facility. 
+
+```{r}
+
+ggplot(alive_on_treatment, aes(x=sites,y=indicator_observations)) + 
+geom_point(color = "red") + 
+geom_line(group = 1, color= "red") + 
+geom_point(data = registrations_graph,aes(x=sites,y=indicator_observations), color = "violet")+
+geom_line(data = registrations_graph, aes(x = sites,y = indicator_observations), group = 1, color = "violet")+
+geom_point(data = transfer_out,aes(x=sites,y=indicator_observations), color = "blue")+
+geom_line(data = transfer_out, aes(x = sites,y = indicator_observations), group = 1, color = "blue")+
+geom_point(data = died_total,aes(x=sites,y=indicator_observations), color = "yellow")+
+geom_line(data = died_total, aes(x = sites,y = indicator_observations), group = 1, color = "yellow")+
+geom_point(data = art_stop,aes(x=sites,y = indicator_observations), color = "green") +
+geom_line(data = art_stop, aes(x = sites,y = indicator_observations), group = 1, color = "green") +
+geom_text(aes(x = "MPC", y = 40000, label = "Ever registered", size=10)) +  
+geom_text(aes(x = "MPC", y = 20000, label = "Alive and on ART")) +  
+geom_text(aes(x = "MPC", y = 7000, label = "Transfer out")) + 
+geom_text(aes(x = "MPC", y = 3000, label = "Died")) +  
+geom_text(aes(x = "MPC", y = 500, label = "ART Stop")) +  
+theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.title = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 1)
+  ) 
+
+
+```
+
+From the graph, it may be inferred that most health facilities have at least half of the patients ever registered. It may also be seen that some sites, that reported a lower number of patients alive and on treatment, in comparison to "ever registered", have reported high counts in other outcomes such as "Transfer Out"
+
+**References**
+==============
+
+1. Douglas GP, Gadabu OJ, Joukes S, Mumba S, McKay MV, Ben-Smith A, et al. Using touchscreen electronic medical record systems to support and monitor national scale-up of antiretroviral therapy in Malawi. PLoS Med. 2010;7(8)
+
+
+
+
